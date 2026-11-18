@@ -6,6 +6,7 @@ import { ConfirmDialog } from './confirm-dialog';
 import { Dropdown, type DropdownOption } from './dropdown';
 import { Icon, type IconName } from './icon';
 import { LiveSourceManager } from './live-source-manager';
+import { ServerSourcesPanel } from './server-sources-panel';
 import {
   HealthBadge,
   SearchInput,
@@ -40,7 +41,7 @@ import { describeParseStats } from '@/lib/tvbox-parser';
  */
 
 type PrimaryTab = 'sources' | 'prefs' | 'data';
-type SecondaryTab = 'vod' | 'live' | 'subs' | 'playback' | 'image' | 'home' | 'io';
+type SecondaryTab = 'vod' | 'server' | 'live' | 'subs' | 'playback' | 'image' | 'home' | 'io';
 
 const PRIMARY_TABS: { id: PrimaryTab; label: string; icon: IconName }[] = [
   { id: 'sources', label: '源管理', icon: 'link' },
@@ -51,6 +52,7 @@ const PRIMARY_TABS: { id: PrimaryTab; label: string; icon: IconName }[] = [
 const SECONDARY_TABS: Record<PrimaryTab, { id: SecondaryTab; label: string }[]> = {
   sources: [
     { id: 'vod', label: '点播源' },
+    { id: 'server', label: '服务端源' },
     { id: 'live', label: '直播源' },
     { id: 'subs', label: '数据源订阅' },
   ],
@@ -132,6 +134,7 @@ export function SourceManagerDrawer({ open, onClose }: { open: boolean; onClose:
       }
     >
       {current === 'vod' && <VodSourcesPanel />}
+      {current === 'server' && <ServerSourcesPanel />}
       {current === 'live' && <LiveSourceManager />}
       {current === 'playback' && <PlaybackPanel />}
       {current === 'image' && <ImagePanel />}

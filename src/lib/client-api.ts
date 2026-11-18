@@ -247,6 +247,56 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  /** —— 服务端预置源（热更新，对所有访问者生效） —— */
+
+  /** 读取服务端当前生效的源 + 存储位置与来源（热更新文件 / .env） */
+  getSourcesConfig: () =>
+    request<{
+      sources: SourceConfig[];
+      origin: 'file' | 'env';
+      filePath: string;
+      fileActive: boolean;
+      savedAt: number | null;
+      envSources: SourceConfig[];
+      keywords: string[];
+    }>('/api/sources'),
+
+  /** 保存源列表：写入 data/sources.json，即时生效，无需重启 */
+  saveSources: (sources: SourceConfig[]) =>
+    request<{ ok: boolean; count: number; savedAt: number; sources: SourceConfig[] }>('/api/sources', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sources }),
+    }),
+
+  /** 健康探测：识别忽略搜索参数的假活源 */
+  probeSources: () =>
+    request<{
+      reports: {
+        sourceKey: string;
+        sourceName: string;
+        url: string;
+        verdict: 'healthy' | 'ignores-keyword' | 'no-relevance' | 'unreachable' | 'empty';
+        summary: string;
+        identicalAcrossKeywords: boolean;
+        keywords: { keyword: string; ok: boolean; count: number; relevant: number; sample: string[]; error?: string }[];
+        ms: number;
+        checkedAt: number;
+      }[];
+      keywords: string[];
+      badCount: number;
+    }>('/api/sources', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'probe' }),
+    }),
+
+  /** 删除热更新文件，回退到 .env 的 DEFAULT_SOURCES */
+  resetSources: () =>
+    request<{ ok: boolean; sources: SourceConfig[]; origin: 'file' | 'env' }>('/api/sources', {
+      method: 'DELETE',
+    }),
+
   /** —— 直播 / IPTV —— */
 
   /** 拉取并解析 M3U 订阅；force=1 跳过服务端缓存 */

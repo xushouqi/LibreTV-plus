@@ -38,8 +38,6 @@ export function sourcesFilePath(): string {
  * 一次 stat 的成本远低于一次读文件 + JSON.parse，且热更新场景下绝大多数请求都命中缓存。
  */
 let cache: { mtimeMs: number; value: SourceConfig[] } | null = null;
-/** 文件缺失时的记忆（同为 null 结果，避免每次请求都 stat 失败） */
-let missingAt: number | null = null;
 
 /** 单条校验：与 env-sources 保持同一把尺子，热更新不能放宽标准 */
 function normalizeSource(item: unknown, index: number): SourceConfig {
@@ -85,7 +83,6 @@ export function readSourcesFile(): SourceConfig[] | null {
     stat = fs.statSync(file);
   } catch {
     cache = null;
-    missingAt = Date.now();
     return null;
   }
   if (cache && cache.mtimeMs === stat.mtimeMs) return cache.value;
@@ -97,7 +94,6 @@ export function readSourcesFile(): SourceConfig[] | null {
     }
     const value = normalizeList(JSON.parse(raw));
     cache = { mtimeMs: stat.mtimeMs, value };
-    missingAt = null;
     return value;
   } catch (err) {
     // 文件损坏不能让整站挂掉：告警后回退到 env 基线，管理员可在后台重新保存修复
@@ -124,7 +120,6 @@ export function writeSourcesFile(sources: SourceConfig[]): StoredSourcesFile {
   // 立即刷新缓存，保存后同一请求链路上的读取立刻拿到新值（不必等下一次 mtime 比对）
   const stat = fs.statSync(file);
   cache = { mtimeMs: stat.mtimeMs, value: sources };
-  missingAt = null;
   return payload;
 }
 
@@ -142,7 +137,6 @@ export function clearSourcesFile(): boolean {
   try {
     fs.unlinkSync(sourcesFilePath());
     cache = null;
-    missingAt = null;
     return true;
   } catch {
     return false;

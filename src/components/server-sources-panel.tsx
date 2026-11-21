@@ -7,7 +7,7 @@ import { EmptyState, LoadingState } from './states';
 import { SectionTitle } from './settings-shared';
 import { useToast } from './toast';
 import { api } from '@/lib/client-api';
-import { cn, hostnameOf } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import type { SourceConfig } from '@/lib/types';
 
 /**

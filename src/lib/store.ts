@@ -3,10 +3,11 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import type { QualityEntry, SourceConfig, LiveSourceConfig, SourceSearchOutcome } from './types';
+import { normalizeDoubanCategories, type DoubanCategory } from './douban-categories';
 import { migrateSkipMarks, type SkipMark, type SkipSegment } from './skip-marks';
 import { isQualityEntryFresh, mergeQualityEntries, qualityKey } from './quality';
 import { clearLiveProbeResultsDb, loadLiveProbeResults, saveLiveProbeResults } from './db';
-import { PERSIST_KEY, createThrottledStorage } from './persist-storage';
+import { PERSIST_KEY, createThrottledStorage, subscribePersistChanges } from './persist-storage';
 
 /**
  * 全局设置（zustand + localStorage 持久化）。
@@ -23,7 +24,24 @@ export interface AppSettings {
   recommendSource: 'douban' | 'bangumi' | 'hot-list';
   /** 用户是否在设置中主动选择过推荐数据源；为 false 时部署者的 DEFAULT_RECOMMEND_SOURCE 默认值可生效 */
   recommendSourceTouched: boolean;
+  /**
+   * 首页豆瓣推荐的自定义栏目（栏目名 + type + tag）。
+   * 空数组 = 使用内置预设标签；非空时首页按此顺序展示栏目并覆盖内置分类。
+   */
+  doubanCategories: DoubanCategory[];
   autoplayNext: boolean;
+  /**
+   * 音量放大（Web Audio 增益链，约 1.8 倍）：默认关闭。
+   * 增益与 video.volume 相乘，对所有音量档位生效，会整体抬高响度，
+   * 因此只作为用户显式开启的兜底，不作为出厂默认。
+   */
+  volumeBoost: boolean;
+  /**
+   * 底部细进度条：默认开启（保持既有观感，不替用户改行为）。
+   * 开启时控制栏收起后画面底边常驻一条 3px 进度线；关闭后收起即完全隐藏。
+   * 类名判定与同步见 lib/mini-progress-bar.ts。
+   */
+  miniProgressBar: boolean;
   /** 跳过片段：按归一化剧名持久化，详见 lib/skip-marks.ts */
   skipMarks: Record<string, SkipMark>;
   /**
@@ -311,6 +329,8 @@ function nextCustomKey(apiList: SourceConfig[]): string {
  * 需要在直接写盘前 flush 缓冲，而运行时依赖方向是 store → db，不能反向引用）。
  */
 
+const persistStorage = createThrottledStorage();
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
@@ -334,7 +354,12 @@ export const useAppStore = create<AppState>()(
       doubanEnabled: true,
       recommendSource: 'hot-list',
       recommendSourceTouched: false,
+      doubanCategories: [],
       autoplayNext: true,
+      // 音量放大默认关闭：开启后对所有音量档位整体抬高约 1.8 倍，交给用户显式选择
+      volumeBoost: false,
+      // 细进度条默认开启：这是多年既有行为，新增的只是「可以关掉」的入口
+      miniProgressBar: true,
       skipMarks: {},
       // 自动跳过默认开启，但只有用户真正标记过片段才生效
       autoSkipSegments: true,
@@ -843,7 +868,7 @@ export const useAppStore = create<AppState>()(
     {
       name: PERSIST_KEY,
       // 节流写入：搜索 / 测活等高频 set 不再每次都整份序列化写盘
-      storage: createJSONStorage(createThrottledStorage),
+      storage: createJSONStorage(() => persistStorage),
       // v1：直播源新增归属字段、最近观看新增 sourceUrl。
       // v2：直播源归属改为多引用（fromSubscription 单值 → fromSubscriptions 数组）。
       // v3：新增片头片尾标记与自动跳过开关（旧快照缺字段时补默认值）。
@@ -853,8 +878,9 @@ export const useAppStore = create<AppState>()(
       // v7：片尾结束也并入同一开关（不再单独提供 autoSkipOutro）。
       // v8：订阅新增 refreshDays / failStreak——两者都缺省即「纯手动 + 无失败记录」，
       //     与旧行为完全一致，因此无需改写存量数据，仅借版本号让 migrate 跑一遍。
+      // v9：首页推荐新增自定义栏目列表；老快照补空数组，继续使用内置分类。
       // 此前未声明 version 的存量数据会被视为 v0 并走 migrate 补齐。
-      version: 8,
+      version: 9,
       migrate: (persisted, version) => {
         const state = { ...((persisted ?? {}) as Partial<AppState>) };
         if (!Array.isArray(state.liveRecent)) state.liveRecent = [];
@@ -909,6 +935,9 @@ export const useAppStore = create<AppState>()(
             };
           });
         }
+        if (version < 9) {
+          state.doubanCategories = normalizeDoubanCategories(state.doubanCategories);
+        }
         return state as AppState;
       },
       // envSources 由服务端每次下发，不进 localStorage；
@@ -931,7 +960,10 @@ export const useAppStore = create<AppState>()(
         doubanEnabled: s.doubanEnabled,
         recommendSource: s.recommendSource,
         recommendSourceTouched: s.recommendSourceTouched,
+        doubanCategories: s.doubanCategories,
         autoplayNext: s.autoplayNext,
+        volumeBoost: s.volumeBoost,
+        miniProgressBar: s.miniProgressBar,
         skipMarks: s.skipMarks,
         autoSkipSegments: s.autoSkipSegments,
         imageProxyMode: s.imageProxyMode,
@@ -945,6 +977,19 @@ export const useAppStore = create<AppState>()(
     }
   )
 );
+
+const syncPersistSnapshot = (state: AppState) => {
+  const { partialize, version } = useAppStore.persist.getOptions();
+  if (partialize) persistStorage.syncSnapshot(partialize(state) as Record<string, unknown>, version);
+};
+syncPersistSnapshot(useAppStore.getState());
+useAppStore.persist.onFinishHydration(syncPersistSnapshot);
+
+// rehydrate 直接替换内存中的持久化字段，不会触发 persist 的 setItem。
+// 首次恢复仍由 Providers 在挂载后执行，避免 SSR hydration 不一致。
+subscribePersistChanges(() => {
+  if (useAppStore.persist.hasHydrated()) void useAppStore.persist.rehydrate();
+});
 
 /**
  * 从 IndexedDB 恢复测活缓存（Providers 挂载后、persist.rehydrate 之后调用）。
